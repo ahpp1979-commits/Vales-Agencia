@@ -214,16 +214,28 @@ const img=new Image();img.src=icon192;img.style.cssText='width:68px;height:68px;
 document.getElementById('manifest-link').href=URL.createObjectURL(new Blob([JSON.stringify({name:'Admin Vales',short_name:'Admin',start_url:window.location.href,display:'standalone',background_color:'#e8f2f8',theme_color:'#e8f2f8',icons:[{src:icon192,sizes:'192x192',type:'image/png'}]})],{type:'application/json'}));
 window.addEventListener('load',()=>{setTimeout(()=>{const s=document.getElementById('splash');s.classList.add('hide');setTimeout(()=>s.remove(),450);},1500);});
 
+const API_URL='https://script.google.com/macros/s/AKfycbw3wsGYsmMAcnL4CP1VysaCDp0vkmwpEHM5hqh-4DftB65_1xmbo8rJIBcrq3fw6KglrQ/exec';
 const PIN='1234';
-const CLAVE_REG='grupoagencia_vales_v2',CLAVE_STOCK='grupoagencia_stock_v1',CLAVE_HIST='grupoagencia_hist_v1';
+
 const FUNCIONARIOS=['Danielle Fontes','Juan Chapitel','Bruno Casaravilla','Nicolas Rodriguez','Nicolas Olivera','Florencia Rodriguez','Carolina Odonne'];
 
-function cargar(){try{return JSON.parse(localStorage.getItem(CLAVE_REG))||[];}catch{return[];}}
-function guardar(arr){try{localStorage.setItem(CLAVE_REG,JSON.stringify(arr));}catch{}}
-function cargarStock(){try{return JSON.parse(localStorage.getItem(CLAVE_STOCK))||{};}catch{return{};}}
-function guardarStock(s){try{localStorage.setItem(CLAVE_STOCK,JSON.stringify(s));}catch{}}
-function cargarHist(){try{return JSON.parse(localStorage.getItem(CLAVE_HIST))||[];}catch{return[];}}
-function guardarHist(h){try{localStorage.setItem(CLAVE_HIST,JSON.stringify(h));}catch{}}
+// ── DATOS COMPARTIDOS VIA GOOGLE SHEETS ──
+let _cache = {registros:[], stock:{}};
+
+async function sincronizar(){
+  try {
+    const r = await fetch(API_URL);
+    const d = await r.json();
+    _cache.registros = d.registros || [];
+    _cache.stock = d.stock || {};
+  } catch(e){ console.error('Error sync',e); }
+}
+function cargar(){ return _cache.registros; }
+function cargarStock(){ return _cache.stock; }
+async function apiPost(data){ 
+  try { await fetch(API_URL,{method:'POST',body:JSON.stringify(data)}); } 
+  catch(e){ console.error('Error post',e); }
+}
 function hoy(){return new Date().toISOString().slice(0,10);}
 function fmtDate(iso){const[y,m,d]=iso.split('-');return`${d}/${m}/${y}`;}
 function fmtHora(){return new Date().toLocaleTimeString('es-UY',{hour:'2-digit',minute:'2-digit'});}
@@ -235,7 +247,7 @@ function pinEnter(){
   if(document.getElementById('pinInput').value===PIN){
     document.querySelector('.view.active').classList.remove('active');
     document.getElementById('adminView').classList.add('active');
-    adminTab('stock');
+    sincronizar().then(()=>adminTab('stock'));
   } else {
     document.getElementById('pinErr').style.display='block';
     document.getElementById('pinInput').value='';
@@ -255,8 +267,8 @@ function adminTab(tab){
   document.getElementById('panelStock').style.display=tab==='stock'?'block':'none';
   document.getElementById('panelRegs').style.display=tab==='regs'?'block':'none';
   document.getElementById('adminFooter').style.display=tab==='regs'?'block':'none';
-  if(tab==='stock')renderStock();
-  if(tab==='regs')renderRegs();
+  if(tab==='stock'){sincronizar().then(renderStock);}
+  if(tab==='regs'){sincronizar().then(renderRegs);}
 }
 
 function renderStock(){
@@ -265,10 +277,8 @@ function renderStock(){
     const cls=saldo>5?'ok':saldo>0?'warn':'cero';
     return`<div class="stock-row"><div style="flex:1"><div class="stock-name">${nombre}</div><div class="stock-detail">Asignados: ${asignado} · Usados: ${usado}</div></div><div class="stock-nums"><div class="stock-saldo ${cls}">${saldo}</div><div class="stock-detail">disponibles</div></div><button class="stock-add-btn" onclick="abrirModal('${nombre}')">+ Agregar</button></div>`;
   }).join('');
-  const hist=cargarHist().slice().reverse();
   const hel=document.getElementById('historialEntregas');
-  if(!hist.length){hel.innerHTML=`<div class="empty"><span>📋</span>Sin asignaciones aún</div>`;return;}
-  hel.innerHTML=hist.slice(0,20).map(h=>`<div class="hist-item"><div><div class="hist-name">${h.nombre}</div><div class="hist-meta">${fmtDate(h.fecha)} · ${h.hora}</div></div><div style="display:flex;align-items:center;gap:6px"><div class="hist-cant">+${h.cantidad}</div><button class="hist-del" onclick="borrarHistItem('${h.id}')" title="Deshacer">↩</button></div></div>`).join('');
+  hel.innerHTML=`<div class="empty"><span>📊</span>Ver Google Sheets para historial completo</div>`;
 }
 
 let modalNombre='';
@@ -282,32 +292,27 @@ function abrirModal(nombre){
   setTimeout(()=>document.getElementById('modalInput').focus(),100);
 }
 function cerrarModal(){document.getElementById('modalOverlay').style.display='none';}
-function confirmarModal(){
+async function confirmarModal(){
   const val=parseInt(document.getElementById('modalInput').value);
   if(!val||val<1){alert('Ingresá una cantidad válida.');return;}
-  const stock=cargarStock();
-  stock[modalNombre]=(stock[modalNombre]||0)+val;
-  guardarStock(stock);
-  const hist=cargarHist();
-  hist.push({id:Date.now().toString(),nombre:modalNombre,cantidad:val,fecha:hoy(),hora:fmtHora()});
-  guardarHist(hist);
+  _cache.stock[modalNombre]=(_cache.stock[modalNombre]||0)+val;
+  await apiPost({action:'asignarStock',nombre:modalNombre,cantidad:val});
   cerrarModal();
   renderStock();
 }
-function borrarHistItem(id){
-  const h=cargarHist().find(x=>x.id===id);
-  if(!h)return;
-  const stock=cargarStock();
-  stock[h.nombre]=Math.max(0,(stock[h.nombre]||0)-h.cantidad);
-  guardarStock(stock);
-  guardarHist(cargarHist().filter(x=>x.id!==id));
+async function borrarHistItem(id){
+  await sincronizar();
   renderStock();
 }
 
 let offsetSemana=0,subTabActual='r';
 function semana(d){offsetSemana+=d;renderRegs();}
 function subTab(t){subTabActual=t;document.getElementById('subR').classList.toggle('active',t==='r');document.getElementById('subF').classList.toggle('active',t==='f');renderContenido();}
-function borrar(id){guardar(cargar().filter(r=>r.id!==id));renderRegs();}
+async function borrar(id){
+  _cache.registros=_cache.registros.filter(r=>r.id!==id);
+  await apiPost({action:'borrarRegistro',id});
+  renderRegs();
+}
 function renderRegs(){
   const rango=semanaRango(offsetSemana);
   const todos=cargar().filter(r=>enSemana(r.fecha,rango));

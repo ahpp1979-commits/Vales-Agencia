@@ -203,9 +203,27 @@ window.addEventListener('load',()=>{setTimeout(()=>{const s=document.getElementB
 if(!window.navigator.standalone&&!window.matchMedia('(display-mode:standalone)').matches){setTimeout(()=>{document.getElementById('installBanner').style.display='flex';},1800);}
 
 const CLAVE_REG='grupoagencia_vales_v2', CLAVE_STOCK='grupoagencia_stock_v1';
-function cargar(){try{return JSON.parse(localStorage.getItem(CLAVE_REG))||[];}catch{return[];}}
-function guardar(arr){try{localStorage.setItem(CLAVE_REG,JSON.stringify(arr));}catch{}}
-function cargarStock(){try{return JSON.parse(localStorage.getItem(CLAVE_STOCK))||{};}catch{return {};}}
+// ── DATOS COMPARTIDOS VIA GOOGLE SHEETS ──
+let _cache = {registros:[], stock:{}};
+let _cacheLoaded = false;
+
+async function sincronizar(){
+  try {
+    const r = await fetch(API_URL);
+    const d = await r.json();
+    _cache.registros = d.registros || [];
+    _cache.stock = d.stock || {};
+    _cacheLoaded = true;
+  } catch(e){ console.error('Error sync',e); }
+}
+function cargar(){ return _cache.registros; }
+function cargarStock(){ return _cache.stock; }
+
+async function guardarRegistro(reg){
+  _cache.registros.push(reg);
+  await fetch(API_URL,{method:'POST',body:JSON.stringify({action:'agregarRegistro',...reg})});
+}
+
 function hoy(){return new Date().toISOString().slice(0,10);}
 function fmtDate(iso){const[y,m,d]=iso.split('-');return`${d}/${m}/${y}`;}
 function fmtHora(){return new Date().toLocaleTimeString('es-UY',{hour:'2-digit',minute:'2-digit'});}
@@ -215,12 +233,14 @@ function goTo(vista){
   document.querySelector('.view.active')?.classList.remove('active');
   const ids={form:'formView',success:'success',landing:'landing'};
   document.getElementById(ids[vista]||vista).classList.add('active');
-  if(vista==='form')initForm();
+  if(vista==='form')const API_URL='https://script.google.com/macros/s/AKfycbw3wsGYsmMAcnL4CP1VysaCDp0vkmwpEHM5hqh-4DftB65_1xmbo8rJIBcrq3fw6KglrQ/exec';
+initForm();
   window.scrollTo(0,0);
 }
 
 let contador=0;
-function initForm(){
+async function initForm(){
+  await sincronizar();
   contador=0;
   document.getElementById('numVal').textContent=0;
   document.getElementById('btnMenos').disabled=true;
@@ -255,13 +275,13 @@ function validarForm(){
   const saldo=nombre?getSaldo(nombre):0;
   document.getElementById('btnEnviar').disabled=!nombre||contador===0||saldo<=0;
 }
-function enviar(){
+async function enviar(){
   const nombre=document.getElementById('selNombre').value;
   if(!nombre||contador===0)return;
   const saldo=getSaldo(nombre);
   if(contador>saldo){alert(`No tenés suficientes vales. Saldo: ${saldo}`);return;}
   const reg={id:Date.now().toString(),nombre,fecha:hoy(),cantidad:contador,hora:fmtHora()};
-  const d=cargar();d.push(reg);guardar(d);
+  await guardarRegistro(reg);
   const nuevoSaldo=saldo-contador;
   const cls=nuevoSaldo>5?'saldo-ok':nuevoSaldo>0?'saldo-warn':'saldo-cero';
   document.getElementById('successCard').innerHTML=`
@@ -273,6 +293,7 @@ function enviar(){
   goTo('success');
 }
 function nuevoRegistro(){goTo('form');}
+const API_URL='https://script.google.com/macros/s/AKfycbw3wsGYsmMAcnL4CP1VysaCDp0vkmwpEHM5hqh-4DftB65_1xmbo8rJIBcrq3fw6KglrQ/exec';
 initForm();
 </script>
 </body>
